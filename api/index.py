@@ -24,5 +24,6 @@ def home():
 def notes():
     cursor = db.cursor()
     cursor.execute("SELECT * FROM notes")
+    db.commit()
     rows = cursor.fetchall()
     return jsonify(rows)
