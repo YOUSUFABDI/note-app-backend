@@ -6,6 +6,7 @@ import os
 import bcrypt
 import random, string
 from flask_mail import Message, Mail
+from werkzeug.utils import secure_filename
 
 load_dotenv()
 
@@ -138,6 +139,40 @@ def get_user():
         "phone_number": user[7]
     }
 
+    cursor.execute("SELECT image_uri FROM profile_imgs WHERE user_id = %s", (user[0],))
+    profile_img = cursor.fetchone()
+    if profile_img:
+        user_info['profile_image'] = f"http://127.0.0.1:9192/uploads/{profile_img[0]}"
+    else:
+        user_info["profile_image"] = None
+
     db.commit() 
     
     return jsonify({"message": user_info, "status": "success"})
+
+@app.route('/api/upload/<string:username>', methods=['POST'])
+def upload_file(username):
+    file = request.files['file']
+    filename = secure_filename(file.filename)
+    file.save(os.path.join('uploads', filename))
+
+    cursor = db.cursor()
+
+    cursor.execute("SELECT profile_imgs.id, profile_imgs.user_id, profile_imgs.image_uri FROM profile_imgs JOIN users ON profile_imgs.user_id = users.id WHERE users.username = %s", (username ,))
+    result = cursor.fetchone()
+    user_id = result[1]
+    old_image_uri = result[2]
+    if result:
+        cursor.execute("UPDATE profile_imgs SET image_uri = %s WHERE user_id  = %s", (filename, user_id))
+
+        # delete the old image
+        if old_image_uri:
+            old_file_path = os.path.join('uploads', old_image_uri)
+            if os.path.exists(old_file_path):
+                os.remove(old_file_path)
+    else:
+        cursor.execute("INSERT INTO profile_imgs (user_id, image_uri) VALUES (%s, %s)", (user_id, filename,))
+
+    db.commit() 
+
+    return jsonify({'success': 'File uploaded successfully'})
