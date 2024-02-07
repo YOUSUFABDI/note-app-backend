@@ -1,5 +1,5 @@
 from app import app
-from flask import request, jsonify
+from flask import request, jsonify, send_from_directory, send_file
 import mysql.connector
 from dotenv import load_dotenv, dotenv_values
 import os
@@ -142,7 +142,8 @@ def get_user():
     cursor.execute("SELECT image_uri FROM profile_imgs WHERE user_id = %s", (user[0],))
     profile_img = cursor.fetchone()
     if profile_img:
-        user_info['profile_image'] = f"http://127.0.0.1:9192/uploads/{profile_img[0]}"
+        user_info['profile_image'] = f"http://192.168.1.5:9192/uploads/{profile_img[0]}"
+        print("Generated Image URL:", user_info['profile_image'])
     else:
         user_info["profile_image"] = None
 
@@ -154,10 +155,10 @@ def get_user():
 def upload_file(username):
     file = request.files['file']
     filename = secure_filename(file.filename)
-    file.save(os.path.join('uploads', filename))
+    file.save(os.path.join('app/uploads', filename))
 
     cursor = db.cursor()
-
+ 
     cursor.execute("SELECT profile_imgs.id, profile_imgs.user_id, profile_imgs.image_uri FROM profile_imgs JOIN users ON profile_imgs.user_id = users.id WHERE users.username = %s", (username ,))
     result = cursor.fetchone()
     user_id = result[1]
@@ -167,7 +168,7 @@ def upload_file(username):
 
         # delete the old image
         if old_image_uri:
-            old_file_path = os.path.join('uploads', old_image_uri)
+            old_file_path = os.path.join('app/uploads', old_image_uri)
             if os.path.exists(old_file_path):
                 os.remove(old_file_path)
     else:
@@ -176,3 +177,83 @@ def upload_file(username):
     db.commit() 
 
     return jsonify({'success': 'File uploaded successfully'})
+
+# Add a new endpoint to serve images
+@app.route('/uploads/<filename>')
+def serve_image(filename):
+    return send_file(os.path.join('uploads', filename))
+
+
+# Forgot password api's
+@app.route('/api/forgot_password', methods=["POST"])
+def forgot_password():
+    gmail = request.json.get("gmail")
+
+    cursor = db.cursor()
+
+    # check if gmail is already taken
+    cursor.execute("SELECT * FROM users WHERE gmail = %s", (gmail,))
+    isGmail = cursor.fetchone()
+    if not isGmail:
+        return jsonify({"message": "Gmail not found", "status": "error"})
+    
+    # Generate OTP code
+    otp_code = ''.join(random.choices(string.digits, k=4))
+
+    # Store OTP code in the DB
+    cursor.execute("DELETE FROM forgot_pass WHERE gmail = %s", (gmail,))
+    cursor.execute("INSERT INTO forgot_pass (gmail, otp_code) VALUES (%s, %s)", (gmail, otp_code))
+
+    # Send OTP code as gmail to check if user belongs the gmail
+    subject = 'Password reset OTP Note Taker App!'
+    body = f'Your OTP code for password reset is: {otp_code}'
+    sender = os.getenv('MAIL_DEFAULT_SENDER')
+    message = Message(subject=subject, body=body, recipients=[gmail], sender=sender)
+    mail.send(message)
+
+    db.commit()
+
+    return jsonify({"message": "Send Password reset OTP code successfully", "status": "success"})
+
+# Verifies reset OTP code
+@app.route('/api/verify_reset_otp', methods=["POST"])
+def verify_reset_otp():
+    gmail = request.json.get('gmail')
+    otp_code = request.json.get('otp_code')
+
+    cursor = db.cursor()
+
+    cursor.execute('SELECT * FROM forgot_pass WHERE gmail = %s AND otp_code = %s', (gmail, otp_code))
+    result = cursor.fetchone()
+
+    # Remove the entry from the OTP table
+    cursor.execute("DELETE FROM forgot_pass WHERE gmail = %s", (gmail,))
+
+    db.commit()
+
+    if not result:
+        return jsonify({"message": "Invalid OTP code", "status": "error"})
+    else:
+        return jsonify({"message": "Success valid OTP", "status": "success"})
+
+@app.route('/api/reset_password', methods=["POST"])
+def reset_password():
+    new_password = request.json.get("new_password")
+    gmail = request.json.get('gmail')
+
+    cursor = db.cursor()
+
+    # Check if gmail exists
+    cursor.execute("SELECT * FROM users WHERE gmail = %s", (gmail,))
+    isGmail = cursor.fetchone()
+    if not isGmail:
+        return jsonify({"message": "Gmail not found", "status": "error"})
+
+    # Hash the password
+    hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+
+    cursor.execute('UPDATE users SET password = %s WHERE gmail = %s', (hashed_password, gmail))
+
+    db.commit()
+
+    return jsonify({"message": "Password changed successfully", "status": "success"})
